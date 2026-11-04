@@ -111,6 +111,144 @@ mgmt <- bind_rows(lapply(glev, function(g) {
 knitr::kable(mgmt, digits = 3, row.names = FALSE)
 ```
 
+
+## Fire effects: overall, by guild, and within guilds
+
+Four nested models: no fire effect (m0), one common δ (m1), one δ per guild (m2), one δ per species (m3).
+H0 = m1 vs m0, H1 = m2 vs m1, H2 = m3 vs m2 (likelihood-ratio tests). δ is the burnt × after interaction (log-odds).
+
+```{r models}
+library(lme4)
+ctrl <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+base <- "detected ~ species * after + species * burnt + species:season + (1 | site) + (1 | site:species)"
+fit  <- function(f) glmer(as.formula(f), d, binomial, control = ctrl, nAGQ = 0)
+m0 <- fit(base)                                   # no fire effect
+m1 <- fit(paste(base, "+ burnt:after"))           # one δ             (H0: m1 vs m0)
+m2 <- fit(paste(base, "+ grp:burnt:after"))       # one δ per guild   (H1: m2 vs m1)
+m3 <- fit(paste(base, "+ species:burnt:after"))   # one δ per species (H2: m3 vs m2)
+anova(m0, m1, m2, m3)
+lrt  <- function(a, b) { t <- anova(a, b); list(chisq = t$Chisq[2], df = t$Df[2], p = t$`Pr(>Chisq)`[2]) }
+lrts <- list(H0 = lrt(m0, m1), H1 = lrt(m1, m2), H2 = lrt(m2, m3))
+```
+
+```{r estimates}
+# names of the burnt × after coefficients, keyed by guild / species level
+baci_terms <- function(nms, prefix) {
+  parts <- strsplit(nms, ":")
+  keep <- vapply(parts, function(x) length(x) == 3 && all(c("burnt", "after") %in% x) &&
+                   any(startsWith(x, prefix)), logical(1))
+  lev <- vapply(parts[keep], function(x) sub(paste0("^", prefix), "", x[startsWith(x, prefix)]), "")
+  setNames(nms[keep], lev)
+}
+ci <- function(label, est, se) data.frame(label = label, est = est, lo = est - 1.96 * se, hi = est + 1.96 * se,
+                                          p = 2 * pnorm(-abs(est / se)))
+# difference between two coefficients, SE from the covariance matrix
+diff_ci <- function(m, a, b, label) {
+  B <- fixef(m); V <- as.matrix(vcov(m))
+  ci(label, unname(B[a] - B[b]), sqrt(V[a, a] + V[b, b] - 2 * V[a, b]))
+}
+
+B1 <- fixef(m1); ba1 <- names(B1)[vapply(strsplit(names(B1), ":"), function(x) setequal(x, c("burnt", "after")), TRUE)]
+common <- ci("All 7 species", unname(B1[ba1]), sqrt(diag(as.matrix(vcov(m1))))[[ba1]])
+
+gi <- baci_terms(names(fixef(m2)), "grp"); se2 <- sqrt(diag(as.matrix(vcov(m2))))
+guild <- bind_rows(lapply(glev, function(g) ci(g, unname(fixef(m2)[gi[[g]]]), unname(se2[gi[[g]]]))))
+contr <- bind_rows(diff_ci(m2, gi[["understorey"]], gi[["canopy"]], "understorey − canopy"),
+                   diff_ci(m2, gi[["understorey"]], gi[["ground"]], "understorey − ground"),
+                   diff_ci(m2, gi[["ground"]],      gi[["canopy"]], "ground − canopy")) |>
+  mutate(p_holm = p.adjust(p, "holm"))
+
+si <- baci_terms(names(fixef(m3)), "species")
+within <- bind_rows(lapply(glev, function(g) {      # every pair of species in the same guild
+  s <- names(guild_of)[guild_of == g]
+  if (length(s) < 2) return(NULL)
+  bind_rows(apply(combn(s, 2), 2, function(pr)
+    diff_ci(m3, si[[pr[1]]], si[[pr[2]]], paste(common_of[pr[1]], "−", common_of[pr[2]])) |> mutate(grp = g)))
+})) |> mutate(p_holm = p.adjust(p, "holm"))
+
+knitr::kable(bind_rows(common, guild, select(contr, -p_holm), select(within, -grp, -p_holm)), digits = 3)
+```
+
+Points are estimates on the log-odds scale with 95% Wald confidence intervals; the dashed line marks no effect.
+δ < 0 means detection declined more at burnt than at unburnt sites after the fire. All four figures share the same x-axis.
+P values are Wald tests, except in (a), where P is the likelihood-ratio test of H0. P (Holm) is adjusted within each figure.
+
+```{r figure-setup}
+library(ggplot2); library(patchwork)
+gcol <- c(ground = "#8C6D31", understorey = "#C0392B", canopy = "#1F3A5F", all = "grey15")
+fmt_ci <- function(e, l, h) gsub("-", "\u2212", sprintf("%.2f (%.2f, %.2f)", e, l, h))
+fmt_p  <- function(p) ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
+lrt_txt <- function(x) sprintf("Likelihood-ratio test: \u03c7\u00b2(%d) = %.2f, P = %s", x$df, x$chisq, fmt_p(x$p))
+# one x-axis for all four figures, wide enough for every interval
+xl <- c(floor(min(common$lo, guild$lo, contr$lo, within$lo) * 2) / 2,
+        ceiling(max(common$hi, guild$hi, contr$hi, within$hi) * 2) / 2)
+theme_fp <- theme_classic(base_size = 10) +
+  theme(axis.text = element_text(colour = "black"), axis.ticks.y = element_blank(),
+        plot.title = element_text(face = "bold", size = 11), plot.subtitle = element_text(size = 9, colour = "grey25"))
+
+# forest plot (left) + table of statistics (right); `cols` = named list, header -> one string per row
+# facet = TRUE splits the rows into guild panels (canopy on top) with the guild named on the left
+forest <- function(df, cols, xlab, title, subtitle = NULL, facet = FALSE, widths = c(1.5, 1)) {
+  df <- mutate(df, label = factor(label, rev(unique(label))))
+  if (facet) df <- mutate(df, grp = factor(grp, rev(glev), tools::toTitleCase(rev(glev))))
+  p1 <- ggplot(df, aes(est, label, colour = col)) +
+    geom_vline(xintercept = 0, linetype = 2, colour = "grey55", linewidth = 0.4) +
+    geom_pointrange(aes(xmin = lo, xmax = hi), size = 0.35, linewidth = 0.6) +
+    scale_colour_manual(values = gcol, guide = "none") +
+    scale_x_continuous(limits = xl, breaks = seq(ceiling(xl[1]), floor(xl[2]), 1),
+                       labels = function(x) gsub("-", "\u2212", x)) +
+    labs(x = xlab, y = NULL) + theme_fp
+  xpos <- c(0, 0.62, 0.8)[seq_along(cols)]
+  tab <- bind_rows(lapply(seq_along(cols), function(i)
+    data.frame(select(df, any_of(c("label", "grp"))), x = xpos[i], txt = cols[[i]])))
+  p2 <- ggplot(tab, aes(x, label, label = txt)) +
+    geom_text(hjust = 0, size = 3.1) +
+    scale_x_continuous(limits = c(0, 1), breaks = xpos, labels = names(cols), position = "top", expand = c(0, 0)) +
+    coord_cartesian(clip = "off") + theme_void(base_size = 10) +
+    theme(axis.text.x.top = element_text(face = "bold", hjust = 0, size = 9, margin = margin(b = 4)))
+  if (facet) {
+    p1 <- p1 + facet_grid(grp ~ ., scales = "free_y", space = "free_y", switch = "y") +
+      theme(strip.placement = "outside", strip.background = element_blank(),
+            strip.text.y.left = element_text(angle = 0, hjust = 1, face = "bold"), panel.spacing.y = unit(8, "pt"))
+    p2 <- p2 + facet_grid(grp ~ ., scales = "free_y", space = "free_y") +
+      theme(strip.text = element_blank(), panel.spacing.y = unit(8, "pt"))
+  }
+  p1 + p2 + plot_layout(widths = widths) + plot_annotation(title = title, subtitle = subtitle, theme = theme_fp)
+}
+```
+
+```{r fig-h0, fig.width = 8, fig.height = 1.8, fig.cap = "Figure 1. Common fire effect across all seven species (H0)."}
+forest(mutate(common, col = "all"),
+       list("\u03b4 (95% CI)" = fmt_ci(common$est, common$lo, common$hi), "P (LRT)" = fmt_p(lrts$H0$p)),
+       xlab = "Fire effect, \u03b4 (log odds ratio)",
+       title = "(a) Overall fire effect", subtitle = lrt_txt(lrts$H0))
+```
+
+```{r fig-h1, fig.width = 8, fig.height = 2.4, fig.cap = "Figure 2. Fire effect for each guild (H1)."}
+g <- mutate(guild, col = label, label = tools::toTitleCase(label))
+forest(g, list("\u03b4 (95% CI)" = fmt_ci(g$est, g$lo, g$hi), "P" = fmt_p(g$p)),
+       xlab = "Fire effect, \u03b4 (log odds ratio)",
+       title = "(b) Fire effect by guild", subtitle = lrt_txt(lrts$H1))
+```
+
+```{r fig-h1-contrasts, fig.width = 8, fig.height = 2.4, fig.cap = "Figure 3. Pairwise differences in fire effect between guilds (H1)."}
+k <- mutate(contr, col = "all", label = sub("^(\\w)", "\\U\\1", label, perl = TRUE))
+forest(k, list("\u0394\u03b4 (95% CI)" = fmt_ci(k$est, k$lo, k$hi), "P" = fmt_p(k$p), "P (Holm)" = fmt_p(k$p_holm)),
+       xlab = "Difference in fire effect, \u0394\u03b4 (log odds ratio)",
+       title = "(c) Guild vs guild", subtitle = "Negative = the first guild declined more")
+```
+
+```{r fig-h2, fig.width = 8, fig.height = 3.4, fig.cap = "Figure 4. Pairwise differences in fire effect between species within the same guild (H2)."}
+wp <- mutate(within, col = grp)
+forest(wp, list("\u0394\u03b4 (95% CI)" = fmt_ci(wp$est, wp$lo, wp$hi), "P" = fmt_p(wp$p), "P (Holm)" = fmt_p(wp$p_holm)),
+       xlab = "Difference in fire effect, \u0394\u03b4 (log odds ratio)",
+       title = "(d) Species vs species within each guild",
+       subtitle = paste0(lrt_txt(lrts$H2), ". Negative = the first species declined more"),
+       facet = TRUE, widths = c(1, 1.15))
+```
+
+
+
 ```{r habitat-figure, fig.width = 8, fig.height = 3.4}
 library(ggplot2)
 library(patchwork)
