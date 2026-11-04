@@ -1,0 +1,68 @@
+---
+title: "Fire effects on forest birds: guilds and species"
+output:
+  html_document:
+    toc: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+suppressMessages({library(dplyr); library(readr)})
+```
+
+**Design.** Forest zones only (NSW coast + escarpment, East Gippsland). Burnt = site at least 2 km inside the
+2019–20 fire extent; unburnt = at least 2 km outside; sites within 2 km of the fire edge are dropped.
+Seven forest species in three guilds: ground (Superb Lyrebird, Eastern Yellow Robin) | understorey (shrub +
+midstorey) | canopy. Flame Robin is excluded (open-country bird). Eastern Yellow Robin is not in
+`detections_long.csv`, so its detections are built from `birdata_raw.csv`: detected = recorded in that survey.
+
+## Load data
+
+```{r load}
+guild_of <- c("Menura novaehollandiae" = "ground",
+              "Eopsaltria australis" = "ground",
+              "Malurus cyaneus" = "understorey",
+              "Sericornis frontalis" = "understorey",
+              "Acanthiza pusilla" = "understorey",
+              "Platycercus elegans" = "canopy",
+              "Colluricincla harmonica" = "canopy")
+common_of <- c("Menura novaehollandiae" = "Superb Lyrebird", "Eopsaltria australis" = "Eastern Yellow Robin",
+               "Malurus cyaneus" = "Superb Fairy-wren",
+               "Sericornis frontalis" = "White-browed Scrubwren", "Acanthiza pusilla" = "Brown Thornbill",
+               "Platycercus elegans" = "Crimson Rosella", "Colluricincla harmonica" = "Grey Shrike-thrush")
+glev <- c("ground", "understorey", "canopy")
+# forest zones = NSW coast + escarpment and East Gippsland (not Canberra/ACT, not inland tablelands)
+is_forest <- function(lat, lon) !(lat > -35.6 & lon > 148.9 & lon < 149.4) & !(lon < 149.6 & lat > -37)
+
+keep <- function(x) filter(x, is_forest(lat, lon), abs(fire_dist_m) >= 2000)
+surveys <- read_csv("data/surveys.csv", show_col_types = FALSE) |> keep() |> mutate(survey_id = as.character(survey_id))
+
+# Eastern Yellow Robin: one row per survey, detected = 1 if recorded in that survey
+eyr <- read_csv("data/birdata_raw.csv", show_col_types = FALSE, col_select = c(eventID, scientificName)) |>
+  filter(grepl("^Eopsaltria australis", gsub("\\s*\\([^)]*\\)", "", scientificName))) |>   # drop subgenus "(...)"
+  distinct(survey_id = as.character(eventID)) |>
+  mutate(detected = 1L)
+eyr_det <- surveys |>
+  left_join(eyr, by = "survey_id") |>
+  mutate(species = "Eopsaltria australis", detected = coalesce(detected, 0L))
+
+d <- read_csv("data/detections_long.csv", show_col_types = FALSE) |>
+  keep() |>
+  filter(species %in% names(guild_of)) |>
+  mutate(survey_id = as.character(survey_id)) |>
+  bind_rows(eyr_det) |>
+  mutate(after  = as.integer(period == "after"),
+         burnt  = as.integer(fire_dist_m < 0),       # fire_dist_m: signed distance to fire edge, negative = inside
+         season = factor(season, levels = c("summer", "autumn", "winter", "spring")),
+         site = factor(site), species = factor(species), grp = factor(guild_of[as.character(species)], glev))
+
+d |>
+  mutate(Species = common_of[as.character(species)], Guild = grp,
+         cell = paste(ifelse(burnt == 1, "Burnt", "Unburnt"), period)) |>
+  group_by(Guild, Species, cell) |>
+  summarise(n = sprintf("%d / %d", sum(detected), n()), .groups = "drop") |>
+  tidyr::pivot_wider(names_from = cell, values_from = n) |>
+  select(Guild, Species, `Burnt before`, `Burnt after`, `Unburnt before`, `Unburnt after`) |>
+  arrange(Guild) |>
+  knitr::kable()
+```
