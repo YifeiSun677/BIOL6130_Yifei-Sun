@@ -246,6 +246,7 @@ forest(k, list("\u0394\u03b4 (95% CI)" = fmt_ci(k$est, k$lo, k$hi), "P" = fmt_p(
 ```
 
 ```{r fig-h2, fig.width = 8, fig.height = 3.4, fig.cap = "Figure 4. Pairwise differences in fire effect between species within the same guild (H2)."}
+wp <- mutate(within, col = grp)
 p <- forest(wp, list("P" = fmt_p(wp$p)),
             xlab = "Difference in fire effect",
             title = "(c) Species vs species within each guild",
