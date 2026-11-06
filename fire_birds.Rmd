@@ -66,9 +66,9 @@ d <- read_csv("data/detections_long.csv", show_col_types = FALSE) |>
   keep() |>
   # keep only species in guild_of
   filter(species %in% names(guild_of)) |>
-  # after = 1 if the survey is post-fire, 0 if pre-fire 
   mutate(survey_id = as.character(survey_id)) |>
   bind_rows(eyr_det) |>
+  # after = 1 if the survey is post-fire, 0 if pre-fire
   mutate(after  = as.integer(period == "after"),
          # burnt = 1 if the site is inside the fire (negative distance), else 0
          burnt  = as.integer(fire_dist_m < 0),      
@@ -162,7 +162,6 @@ H0 = m1 vs m0, H1 = m2 vs m1, H2 = m3 vs m2 (likelihood-ratio tests). δ is the 
 ```{r models}
 # these lines are the same as previous lines
 # I'm intended to do so because levins model was added at last, even without it, the codes are still self-contained
-library(lme4)
 ctrl <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
 base <- "detected ~ species * after + species * burnt + species:season + (1 | site) + (1 | site:species)"
 # fit(formula text) fits a glmer with the same settings
@@ -216,7 +215,6 @@ si <- baci_terms(names(fixef(m3)), "species")
 within <- bind_rows(lapply(glev, function(g) {      
   # every pair of species in the same guild
   s <- names(guild_of)[guild_of == g]
-  if (length(s) < 2) return(NULL)
   bind_rows(apply(combn(s, 2), 2, function(pr)
     diff_ci(m3, si[[pr[1]]], si[[pr[2]]], paste(common_of[pr[1]], "−", common_of[pr[2]])) |> mutate(grp = g)))
 })) |> mutate(p_holm = p.adjust(p, "holm"))
@@ -230,15 +228,15 @@ Points are estimates on the log-odds scale with 95% Wald confidence intervals; t
 P values are Wald tests, except in (a), where P is the likelihood-ratio test of H0. P (Holm) is adjusted within each figure.
 
 ```{r figure-setup}
-library(ggplot2)
-library(patchwork)
+# a colour for each guild
 gcol <- c(ground = "#8C6D31", understorey = "#C0392B", canopy = "#1F3A5F", all = "grey15")
 fmt_ci <- function(e, l, h) gsub("-", "\u2212", sprintf("%.2f (%.2f, %.2f)", e, l, h))
+# format P: "< 0.001" if tiny, otherwise 3 decimals
 fmt_p  <- function(p) ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
-lrt_txt <- function(x) sprintf("Likelihood-ratio test: \u03c7\u00b2(%d) = %.2f, P = %s", x$df, x$chisq, fmt_p(x$p))
 # one x-axis for all four figures, wide enough for every interval
 xl <- c(floor(min(common$lo, guild$lo, contr$lo, within$lo) * 2) / 2,
         ceiling(max(common$hi, guild$hi, contr$hi, within$hi) * 2) / 2)
+# same theme
 theme_fp <- theme_classic(base_size = 10) +
   theme(axis.text = element_text(colour = "black"), axis.ticks.y = element_blank(),
         plot.title = element_text(face = "bold", size = 11), plot.subtitle = element_text(size = 9, colour = "grey25"))
@@ -247,6 +245,7 @@ theme_fp <- theme_classic(base_size = 10) +
 # facet = TRUE splits the rows into guild panels (canopy on top) with the guild named on the left
 forest <- function(df, cols, xlab, title, subtitle = NULL, facet = FALSE, widths = c(1.5, 1)) {
   df <- mutate(df, label = factor(label, rev(unique(label))))
+  # only when splitting by guild:
   if (facet) df <- mutate(df, grp = factor(grp, rev(glev), tools::toTitleCase(rev(glev))))
   p1 <- ggplot(df, aes(est, label, colour = col)) +
     geom_vline(xintercept = 0, linetype = 2, colour = "grey55", linewidth = 0.4) +
@@ -275,6 +274,7 @@ forest <- function(df, cols, xlab, title, subtitle = NULL, facet = FALSE, widths
 ```
 
 ```{r fig-h0, fig.width = 8, fig.height = 1.8, fig.cap = "Figure 1. Common fire effect across all seven species (H0)."}
+# fig1., overall effect
 forest(mutate(common, col = "all"),
        list("P" = fmt_p(lrts$H0$p)),
        xlab = "Fire effect",
@@ -295,8 +295,9 @@ p
 ```
 
 ```{r fig-h1-contrasts, fig.width = 8, fig.height = 2.4, fig.cap = "Figure 3. Pairwise differences in fire effect between guilds (H1)."}
+# was not used in poster, but still kept for better comparison
 k <- mutate(contr, col = "all", label = sub("^(\\w)", "\\U\\1", label, perl = TRUE))
-forest(k, list("\u0394\u03b4 (95% CI)" = fmt_ci(k$est, k$lo, k$hi), "P" = fmt_p(k$p), "P (Holm)" = fmt_p(k$p_holm)),
+forest(k, list("P" = fmt_p(k$p)),
        xlab = "Difference in fire effect, \u0394\u03b4 (log odds ratio)",
        title = "(c) Guild vs guild", subtitle = "Negative = the first guild declined more")
 ```
@@ -312,20 +313,12 @@ p[[1]] <- p[[1]] + theme(strip.text.y.left = element_text(size = 15, face = "bol
 p
 ```
 
-
-
 ```{r habitat-figure, fig.width = 8, fig.height = 3.4}
-gcol <- c(ground = "#8C6D31", understorey = "#C0392B", canopy = "#1F3A5F")
-lab  <- function(x) tools::toTitleCase(x)
-fmt  <- function(x, d = 2) gsub("-", "\u2212", formatC(x, format = "f", digits = d))
-theme_fp <- theme_classic(base_size = 10) +
-  theme(axis.text = element_text(colour = "black"), axis.ticks.y = element_blank(),
-        plot.title = element_text(face = "bold", size = 11), plot.subtitle = element_text(size = 9, colour = "grey25"))
-
-w <- tidyr::pivot_wider(mgmt, id_cols = guild, names_from = quantity, values_from = c(est, lo, hi)) |>
-  mutate(guild = factor(lab(guild), lab(glev)))                       # first level at the bottom: canopy on top
-bars <- bind_rows(transmute(w, guild, part = "Occupied after fire", value = est_Pstar - pmax(est_v, 0)),
-                  transmute(w, guild, part = "Lost to fire (v)",    value = pmax(est_v, 0))) |>
+# gcol, theme_fp from figure-setup
+w <- tidyr::pivot_wider(mgmt, id_cols = guild, names_from = quantity, values_from = est) |>
+  mutate(guild = factor(tools::toTitleCase(guild), tools::toTitleCase(glev)))   # first level at the bottom: canopy on top
+bars <- bind_rows(transmute(w, guild, part = "Occupied after fire", value = Pstar - pmax(v, 0)),
+                  transmute(w, guild, part = "Lost to fire (v)",    value = pmax(v, 0))) |>
   mutate(part = factor(part, c("Lost to fire (v)", "Occupied after fire")),
          fillkey = ifelse(part == "Lost to fire (v)", "lost", tolower(as.character(guild))))
 
@@ -336,18 +329,16 @@ p1 <- ggplot(bars, aes(value, guild)) +
   labs(x = "Proportion of surveys with a detection, P", y = NULL) +
   theme_fp + theme(axis.text.y = element_text(face = "bold", size = 15, colour = "black"))
 
-cols <- list("Lost" = paste0(fmt(pmax(100 * w$est_buffer_used, 0), 0), "%"))
-xpos <- 0
-tab <- bind_rows(lapply(seq_along(cols), function(i) data.frame(guild = w$guild, x = xpos[i], txt = cols[[i]])))
+# share of habitat lost, as a whole-number percentage
+tab <- data.frame(guild = w$guild, x = 0, txt = sprintf("%.0f%%", pmax(100 * w$buffer_used, 0)))
 p2 <- ggplot(tab, aes(x, guild, label = txt)) +
   geom_text(hjust = 0, size = 6) +
-  scale_x_continuous(limits = c(0, 1), breaks = xpos, labels = names(cols), position = "top", expand = c(0, 0)) +
+  scale_x_continuous(limits = c(0, 1), breaks = 0, labels = "Lost", position = "top", expand = c(0, 0)) +
   coord_cartesian(clip = "off") + theme_void(base_size = 10) +
   theme(axis.text.x.top = element_text(face = "bold", hjust = 0, size = 15, margin = margin(b = 4)))
 
 (p1 + p2 + plot_layout(widths = c(3, 1))) +
   plot_annotation(title = "Habitat lost to fire, by guild",
-                  theme = theme_fp + theme(plot.title = element_text(size = 18, face = "bold"),
-                                           plot.caption = element_text(hjust = 0, size = 8, colour = "grey30")))
+                  theme = theme_fp + theme(plot.title = element_text(size = 18, face = "bold")))
 ```
 
