@@ -363,58 +363,78 @@ overall, by guild, and within guilds</a></li>
 </ul>
 </div>
 
-<p><strong>Design.</strong> Forest zones only (NSW coast + escarpment,
-East Gippsland). Burnt = site at least 2 km inside the 2019–20 fire
-extent; unburnt = at least 2 km outside; sites within 2 km of the fire
-edge are dropped. Seven forest species in three guilds: ground (Superb
-Lyrebird, Eastern Yellow Robin) | understorey (shrub + midstorey) |
-canopy. Flame Robin is excluded (open-country bird). Eastern Yellow
-Robin is not in <code>detections_long.csv</code>, so its detections are
-built from <code>birdata_raw.csv</code>: detected = recorded in that
-survey.</p>
+<p><strong>Design.</strong></p>
+<p>Study area: Forest zones only (NSW coast + escarpment, East
+Gippsland).</p>
+<p>Split: Burnt = site at least 2 km inside the 2019–20 fire extent;
+unburnt = at least 2 km outside; sites within 2 km of the fire edge are
+dropped.</p>
+<p>Species: Canopy: Crimson Rosella, Grey Shrike-thrush. Understorey:
+Superb Fairy-wren, White-browed Scrubwren, Brown Thornbill. Ground:
+Superb Lyrebird, Eastern Yellow Robin. Eastern Yellow Robin is not in
+<code>detections_long.csv</code>, so its detections are built from
+<code>birdata_raw.csv</code>: detected = recorded in that survey.</p>
 <div id="load-data" class="section level2">
 <h2>Load data</h2>
-<pre class="r"><code>guild_of &lt;- c(&quot;Menura novaehollandiae&quot; = &quot;ground&quot;,
+<pre class="r"><code># set each species to their guild
+guild_of &lt;- c(&quot;Menura novaehollandiae&quot; = &quot;ground&quot;,
               &quot;Eopsaltria australis&quot; = &quot;ground&quot;,
               &quot;Malurus cyaneus&quot; = &quot;understorey&quot;,
               &quot;Sericornis frontalis&quot; = &quot;understorey&quot;,
               &quot;Acanthiza pusilla&quot; = &quot;understorey&quot;,
               &quot;Platycercus elegans&quot; = &quot;canopy&quot;,
               &quot;Colluricincla harmonica&quot; = &quot;canopy&quot;)
+
+# give display names (study name and universal name)
 common_of &lt;- c(&quot;Menura novaehollandiae&quot; = &quot;Superb Lyrebird&quot;, &quot;Eopsaltria australis&quot; = &quot;Eastern Yellow Robin&quot;,
                &quot;Malurus cyaneus&quot; = &quot;Superb Fairy-wren&quot;,
                &quot;Sericornis frontalis&quot; = &quot;White-browed Scrubwren&quot;, &quot;Acanthiza pusilla&quot; = &quot;Brown Thornbill&quot;,
                &quot;Platycercus elegans&quot; = &quot;Crimson Rosella&quot;, &quot;Colluricincla harmonica&quot; = &quot;Grey Shrike-thrush&quot;)
+
+# sets the guild order, set ground as reference
 glev &lt;- c(&quot;ground&quot;, &quot;understorey&quot;, &quot;canopy&quot;)
-# forest zones = NSW coast + escarpment and East Gippsland (not Canberra/ACT, not inland tablelands)
+# forest zones = NSW coast + escarpment and East Gippsland (not Canberra/ACT, not inland tablelands), search was done by claude code by search papers and use the same zones, latitude/longitude rectangle
 is_forest &lt;- function(lat, lon) !(lat &gt; -35.6 &amp; lon &gt; 148.9 &amp; lon &lt; 149.4) &amp; !(lon &lt; 149.6 &amp; lat &gt; -37)
 
+# keeps forest sites at least 2 km from the fire edge
 keep &lt;- function(x) filter(x, is_forest(lat, lon), abs(fire_dist_m) &gt;= 2000)
+# load data, turn survey_id from a number into text so it can be joined later
 surveys &lt;- read_csv(&quot;data/surveys.csv&quot;, show_col_types = FALSE) |&gt; keep() |&gt; mutate(survey_id = as.character(survey_id))
 
 # Eastern Yellow Robin: one row per survey, detected = 1 if recorded in that survey
+# read the raw Birdata file, use only two cols (survey ID and species name) to save memory
 eyr &lt;- read_csv(&quot;data/birdata_raw.csv&quot;, show_col_types = FALSE, col_select = c(eventID, scientificName)) |&gt;
-  filter(grepl(&quot;^Eopsaltria australis&quot;, gsub(&quot;\\s*\\([^)]*\\)&quot;, &quot;&quot;, scientificName))) |&gt;   # drop subgenus &quot;(...)&quot;
+  # gsub(...) deletes any bracketed part of the name
+  filter(grepl(&quot;^Eopsaltria australis&quot;, gsub(&quot;\\s*\\([^)]*\\)&quot;, &quot;&quot;, scientificName))) |&gt;   
   distinct(survey_id = as.character(eventID)) |&gt;
   mutate(detected = 1L)
 eyr_det &lt;- surveys |&gt;
   left_join(eyr, by = &quot;survey_id&quot;) |&gt;
   mutate(species = &quot;Eopsaltria australis&quot;, detected = coalesce(detected, 0L))
 
+# detection table (one row per survey × species, detected 0/1)
 d &lt;- read_csv(&quot;data/detections_long.csv&quot;, show_col_types = FALSE) |&gt;
+  # keep funtion, filter 2kn
   keep() |&gt;
+  # keep only species in guild_of
   filter(species %in% names(guild_of)) |&gt;
+  # after = 1 if the survey is post-fire, 0 if pre-fire 
   mutate(survey_id = as.character(survey_id)) |&gt;
   bind_rows(eyr_det) |&gt;
   mutate(after  = as.integer(period == &quot;after&quot;),
-         burnt  = as.integer(fire_dist_m &lt; 0),       # fire_dist_m: signed distance to fire edge, negative = inside
+         # burnt = 1 if the site is inside the fire (negative distance), else 0
+         burnt  = as.integer(fire_dist_m &lt; 0),      
          season = factor(season, levels = c(&quot;summer&quot;, &quot;autumn&quot;, &quot;winter&quot;, &quot;spring&quot;)),
+         # site and species as categories
          site = factor(site), species = factor(species), grp = factor(guild_of[as.character(species)], glev))
 
+# a summary table
 d |&gt;
   mutate(Species = common_of[as.character(species)], Guild = grp,
          cell = paste(ifelse(burnt == 1, &quot;Burnt&quot;, &quot;Unburnt&quot;), period)) |&gt;
+  # group rows by guild, species and cell
   group_by(Guild, Species, cell) |&gt;
+  # detections / surveys
   summarise(n = sprintf(&quot;%d / %d&quot;, sum(detected), n()), .groups = &quot;drop&quot;) |&gt;
   tidyr::pivot_wider(names_from = cell, values_from = n) |&gt;
   select(Guild, Species, `Burnt before`, `Burnt after`, `Unburnt before`, `Unburnt after`) |&gt;

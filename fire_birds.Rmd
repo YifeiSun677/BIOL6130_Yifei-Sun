@@ -7,18 +7,24 @@ output:
 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
-suppressMessages({library(dplyr); library(readr)})
+suppressMessages({library(dplyr); library(readr); library(lme4); library(ggplot2); library(patchwork)})
 ```
 
-**Design.** Forest zones only (NSW coast + escarpment, East Gippsland). Burnt = site at least 2 km inside the
-2019–20 fire extent; unburnt = at least 2 km outside; sites within 2 km of the fire edge are dropped.
-Seven forest species in three guilds: ground (Superb Lyrebird, Eastern Yellow Robin) | understorey (shrub +
-midstorey) | canopy. Flame Robin is excluded (open-country bird). Eastern Yellow Robin is not in
-`detections_long.csv`, so its detections are built from `birdata_raw.csv`: detected = recorded in that survey.
+**Design.** 
+
+Study area: Forest zones only (NSW coast + escarpment, East Gippsland). 
+
+Split: Burnt = site at least 2 km inside the 2019–20 fire extent; unburnt = at least 2 km outside; sites within 2 km of the fire edge are dropped.
+
+Species: Canopy: Crimson Rosella, Grey Shrike-thrush.
+Understorey: Superb Fairy-wren, White-browed Scrubwren, Brown Thornbill.
+Ground: Superb Lyrebird, Eastern Yellow Robin.
+Eastern Yellow Robin is not in `detections_long.csv`, so its detections are built from `birdata_raw.csv`: detected = recorded in that survey.
 
 ## Load data
 
 ```{r load}
+# set each species to their guild
 guild_of <- c("Menura novaehollandiae" = "ground",
               "Eopsaltria australis" = "ground",
               "Malurus cyaneus" = "understorey",
@@ -26,40 +32,57 @@ guild_of <- c("Menura novaehollandiae" = "ground",
               "Acanthiza pusilla" = "understorey",
               "Platycercus elegans" = "canopy",
               "Colluricincla harmonica" = "canopy")
+
+# give display names (study name and universal name)
 common_of <- c("Menura novaehollandiae" = "Superb Lyrebird", "Eopsaltria australis" = "Eastern Yellow Robin",
                "Malurus cyaneus" = "Superb Fairy-wren",
                "Sericornis frontalis" = "White-browed Scrubwren", "Acanthiza pusilla" = "Brown Thornbill",
                "Platycercus elegans" = "Crimson Rosella", "Colluricincla harmonica" = "Grey Shrike-thrush")
+
+# sets the guild order, set ground as reference
 glev <- c("ground", "understorey", "canopy")
-# forest zones = NSW coast + escarpment and East Gippsland (not Canberra/ACT, not inland tablelands)
+# forest zones = NSW coast + escarpment and East Gippsland (not Canberra/ACT, not inland tablelands), search was done by claude code by search papers and use the same zones, latitude/longitude rectangle
 is_forest <- function(lat, lon) !(lat > -35.6 & lon > 148.9 & lon < 149.4) & !(lon < 149.6 & lat > -37)
 
+# keeps forest sites at least 2 km from the fire edge
 keep <- function(x) filter(x, is_forest(lat, lon), abs(fire_dist_m) >= 2000)
+# load data, turn survey_id from a number into text so it can be joined later
 surveys <- read_csv("data/surveys.csv", show_col_types = FALSE) |> keep() |> mutate(survey_id = as.character(survey_id))
 
 # Eastern Yellow Robin: one row per survey, detected = 1 if recorded in that survey
+# read the raw Birdata file, use only two cols (survey ID and species name) to save memory
 eyr <- read_csv("data/birdata_raw.csv", show_col_types = FALSE, col_select = c(eventID, scientificName)) |>
-  filter(grepl("^Eopsaltria australis", gsub("\\s*\\([^)]*\\)", "", scientificName))) |>   # drop subgenus "(...)"
+  # gsub(...) deletes any bracketed part of the name
+  filter(grepl("^Eopsaltria australis", gsub("\\s*\\([^)]*\\)", "", scientificName))) |>   
   distinct(survey_id = as.character(eventID)) |>
   mutate(detected = 1L)
 eyr_det <- surveys |>
   left_join(eyr, by = "survey_id") |>
   mutate(species = "Eopsaltria australis", detected = coalesce(detected, 0L))
 
+# detection table (one row per survey × species, detected 0/1)
 d <- read_csv("data/detections_long.csv", show_col_types = FALSE) |>
+  # keep funtion, filter 2kn
   keep() |>
+  # keep only species in guild_of
   filter(species %in% names(guild_of)) |>
+  # after = 1 if the survey is post-fire, 0 if pre-fire 
   mutate(survey_id = as.character(survey_id)) |>
   bind_rows(eyr_det) |>
   mutate(after  = as.integer(period == "after"),
-         burnt  = as.integer(fire_dist_m < 0),       # fire_dist_m: signed distance to fire edge, negative = inside
+         # burnt = 1 if the site is inside the fire (negative distance), else 0
+         burnt  = as.integer(fire_dist_m < 0),      
          season = factor(season, levels = c("summer", "autumn", "winter", "spring")),
+         # site and species as categories
          site = factor(site), species = factor(species), grp = factor(guild_of[as.character(species)], glev))
 
+# a summary table
 d |>
   mutate(Species = common_of[as.character(species)], Guild = grp,
          cell = paste(ifelse(burnt == 1, "Burnt", "Unburnt"), period)) |>
+  # group rows by guild, species and cell
   group_by(Guild, Species, cell) |>
+  # detections / surveys
   summarise(n = sprintf("%d / %d", sum(detected), n()), .groups = "drop") |>
   tidyr::pivot_wider(names_from = cell, values_from = n) |>
   select(Guild, Species, `Burnt before`, `Burnt after`, `Unburnt before`, `Unburnt after`) |>
@@ -75,26 +98,42 @@ site × species. In Levins' model with habitat destruction, P = 1 − v − e/c,
 v = P without fire − P with fire, both predicted for burnt sites after the fire. The unburnt sites give e/c = 1 − P*.
 
 ```{r levins}
-library(lme4)
+# model-fitting settings: use the "bobyqa" optimizer
 ctrl <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
+# equation
 base <- "detected ~ species * after + species * burnt + species:season + (1 | site) + (1 | site:species)"
+# dds "+ grp:burnt:after" (one fire effect δ per guild) to the formula and turns it to a formula
 m2 <- glmer(as.formula(paste(base, "+ grp:burnt:after")), d, binomial, control = ctrl, nAGQ = 0)
 
-# coefficient name for guild g × burnt × after (any order of the parts)
+# coefficient name for guild g × burnt × after 
+# for each guild g, find the name of its δ coefficient; the result is named by guild
 gterm <- sapply(glev, function(g) {
   nms <- names(fixef(m2))
   nms[vapply(strsplit(nms, ":"), function(x) length(x) == 3 && setequal(x, c(paste0("grp", g), "burnt", "after")), TRUE)]
 })
+# B = all coefficient estimates; V = their variance–covariance matrix (uncertainty and correlations)
 B <- fixef(m2); V <- as.matrix(vcov(m2))
+# TRUE/FALSE for each row: TRUE = burnt site, after the fire
 ba <- d$burnt == 1 & d$after == 1
-eta <- predict(m2, re.form = NA)[ba]               # linear predictor, burnt sites after the fire
+# linear predictor, burnt sites after the fire
+eta <- predict(m2, re.form = NA)[ba]               
 set.seed(1)
 draws <- MASS::mvrnorm(2000, B[gterm], V[gterm, gterm])   # uncertainty in the guild δ
+```
 
-# P* = 1 - e/c (no fire); fire adds v:  P = 1 - v - e/c
-#   buffer_used = v / P*             share of the way to the extinction threshold (v = P*)
-#   c_needed    = (e/c) / (e/c - v)  factor by which colonisation must rise to restore P*
-#   e_needed    = 1 - v / (e/c)      factor by which local extinction must fall to restore P*
+
+Ecology model: P = 1 − v − e/c
+
+P* = 1 - e/c (no fire); fire adds v:  P = 1 - v - e/c
+
+buffer_used = v / P*  share of the way to the extinction threshold (v = P*)
+
+c_needed = (e/c) / (e/c - v)  factor by which colonisation must rise to restore P*
+
+e_needed = 1 - v / (e/c) factor by which local extinction must fall to restore P*
+
+```{r model}
+# function: for guild g with fire effect delta, compute the Levins quantities
 mgmt_one <- function(g, delta) {
   i <- d$grp[ba] == g
   Pstar <- mean(plogis(eta[i] - B[[gterm[[g]]]]))
@@ -102,10 +141,13 @@ mgmt_one <- function(g, delta) {
   ec <- 1 - Pstar
   c(Pstar = Pstar, v = v, e_over_c = ec, buffer_used = v / Pstar, c_needed = ec / (ec - v), e_needed = 1 - v / ec)
 }
+# for each guild, build a small table; bind_rows stacks the three tables
 mgmt <- bind_rows(lapply(glev, function(g) {
+  # point estimates, using the fitted δ
   est  <- mgmt_one(g, B[[gterm[[g]]]])
   sims <- t(apply(draws, 1, function(x) mgmt_one(g, x[[gterm[[g]]]])))
   data.frame(guild = g, quantity = names(est), est = est,
+             # 95% CI
              lo = apply(sims, 2, quantile, 0.025), hi = apply(sims, 2, quantile, 0.975))
 }))
 knitr::kable(mgmt, digits = 3, row.names = FALSE)
@@ -118,21 +160,27 @@ Four nested models: no fire effect (m0), one common δ (m1), one δ per guild (m
 H0 = m1 vs m0, H1 = m2 vs m1, H2 = m3 vs m2 (likelihood-ratio tests). δ is the burnt × after interaction (log-odds).
 
 ```{r models}
+# these lines are the same as previous lines
+# I'm intended to do so because levins model was added at last, even without it, the codes are still self-contained
 library(lme4)
 ctrl <- glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 1e5))
 base <- "detected ~ species * after + species * burnt + species:season + (1 | site) + (1 | site:species)"
+# fit(formula text) fits a glmer with the same settings
 fit  <- function(f) glmer(as.formula(f), d, binomial, control = ctrl, nAGQ = 0)
-m0 <- fit(base)                                   # no fire effect
-m1 <- fit(paste(base, "+ burnt:after"))           # one δ             (H0: m1 vs m0)
-m2 <- fit(paste(base, "+ grp:burnt:after"))       # one δ per guild   (H1: m2 vs m1)
-m3 <- fit(paste(base, "+ species:burnt:after"))   # one δ per species (H2: m3 vs m2)
+m0 <- fit(base) # no fire effect
+m1 <- fit(paste(base, "+ burnt:after")) # one δ (H0: m1 vs m0)
+m2 <- fit(paste(base, "+ grp:burnt:after")) # one δ per guild (H1: m2 vs m1)
+m3 <- fit(paste(base, "+ species:burnt:after")) # one δ per species (H2: m3 vs m2)
+# likelihood-ratio tests: m1 vs m0, m2 vs m1, m3 vs m2
 anova(m0, m1, m2, m3)
+# a function comparing two models; it returns χ², df and P from row 2 of the anova table
 lrt  <- function(a, b) { t <- anova(a, b); list(chisq = t$Chisq[2], df = t$Df[2], p = t$`Pr(>Chisq)`[2]) }
 lrts <- list(H0 = lrt(m0, m1), H1 = lrt(m1, m2), H2 = lrt(m2, m3))
 ```
 
 ```{r estimates}
 # names of the burnt × after coefficients, keyed by guild / species level
+# a function: from coefficient names, find the δ terms whose third part starts with prefix ("grp" or "species")
 baci_terms <- function(nms, prefix) {
   parts <- strsplit(nms, ":")
   keep <- vapply(parts, function(x) length(x) == 3 && all(c("burnt", "after") %in% x) &&
@@ -140,32 +188,40 @@ baci_terms <- function(nms, prefix) {
   lev <- vapply(parts[keep], function(x) sub(paste0("^", prefix), "", x[startsWith(x, prefix)]), "")
   setNames(nms[keep], lev)
 }
+# calc CI
 ci <- function(label, est, se) data.frame(label = label, est = est, lo = est - 1.96 * se, hi = est + 1.96 * se,
                                           p = 2 * pnorm(-abs(est / se)))
+
 # difference between two coefficients, SE from the covariance matrix
 diff_ci <- function(m, a, b, label) {
   B <- fixef(m); V <- as.matrix(vcov(m))
   ci(label, unname(B[a] - B[b]), sqrt(V[a, a] + V[b, b] - 2 * V[a, b]))
 }
 
+# m1's coefficients; ba1 = the name of the single burnt×after coefficient
 B1 <- fixef(m1); ba1 <- names(B1)[vapply(strsplit(names(B1), ":"), function(x) setequal(x, c("burnt", "after")), TRUE)]
 common <- ci("All 7 species", unname(B1[ba1]), sqrt(diag(as.matrix(vcov(m1))))[[ba1]])
 
+# gi = the 3 guild δ names in m2, labelled by guild; se2 = SEs of all m2 coefficients
 gi <- baci_terms(names(fixef(m2)), "grp"); se2 <- sqrt(diag(as.matrix(vcov(m2))))
 guild <- bind_rows(lapply(glev, function(g) ci(g, unname(fixef(m2)[gi[[g]]]), unname(se2[gi[[g]]]))))
+# stack the 3 pairwise guild differences
 contr <- bind_rows(diff_ci(m2, gi[["understorey"]], gi[["canopy"]], "understorey − canopy"),
                    diff_ci(m2, gi[["understorey"]], gi[["ground"]], "understorey − ground"),
-                   diff_ci(m2, gi[["ground"]],      gi[["canopy"]], "ground − canopy")) |>
+                   diff_ci(m2, gi[["ground"]], gi[["canopy"]], "ground − canopy")) |>
   mutate(p_holm = p.adjust(p, "holm"))
 
+# the 7 species δ names in m3, labelled by species
 si <- baci_terms(names(fixef(m3)), "species")
-within <- bind_rows(lapply(glev, function(g) {      # every pair of species in the same guild
+within <- bind_rows(lapply(glev, function(g) {      
+  # every pair of species in the same guild
   s <- names(guild_of)[guild_of == g]
   if (length(s) < 2) return(NULL)
   bind_rows(apply(combn(s, 2), 2, function(pr)
     diff_ci(m3, si[[pr[1]]], si[[pr[2]]], paste(common_of[pr[1]], "−", common_of[pr[2]])) |> mutate(grp = g)))
 })) |> mutate(p_holm = p.adjust(p, "holm"))
 
+# print one combined table: overall δ, guild δs, guild contrasts, species contrasts
 knitr::kable(bind_rows(common, guild, select(contr, -p_holm), select(within, -grp, -p_holm)), digits = 3)
 ```
 
