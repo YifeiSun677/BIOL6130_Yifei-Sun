@@ -15,6 +15,10 @@ These findings support prioritising understorey habitat retention and regenerati
 
 ## Reproducing the analysis
 
+**fire_birds.rmd file is self-contained. It takes the filtered dataset in data/ as input.**
+**If you want to start by downloading original dataset and do data filtering, please run 01_download.R in data/ folder.**
+**Which needs an ALA email and may takes one hour.**
+
 Requirements: R ≥ 4.6 and  packages (versions used for the reported results):
 
 | Package | Version | | Package | Version |
