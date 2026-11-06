@@ -495,8 +495,6 @@ burnt/unburnt</td>
 </tr>
 </tbody>
 </table>
-<!-- TODO: add the script that builds surveys.csv / detections_long.csv from birdata_raw.csv + data/fire/,
-     and describe it here (how fire_dist_m is computed, which surveys/periods are kept, the fire season removed). -->
 </div>
 </div>
 <div id="data-provenance" class="section level2">
@@ -520,15 +518,14 @@ burnt/unburnt</td>
 <tr class="odd">
 <td>Bird surveys (<code>birdata_raw.csv</code>, and the derived
 <code>surveys.csv</code>, <code>detections_long.csv</code>)</td>
-<td>BirdLife Australia <strong>Birdata</strong> program; volunteer
-observers following the standard 2-ha 20-minute search protocol.
-Downloaded from the Atlas of Living Australia (data resource dr359) with
-the <code>galah</code> R package on <em>[download date]</em>.</td>
+<td>BirdLife Australia Birdata program; volunteer observers following
+the standard 2-ha 20-minute search protocol. Downloaded from the Atlas
+of Living Australia (data resource dr359) with the <code>galah</code> R
+package.</td>
 <td>CC BY-NC 4.0</td>
-<td>BirdLife Australia (<em>[year]</em>). Birdata. Accessed via the
-Atlas of Living Australia, <a href="https://collections.ala.org.au/public/show/dr359" class="uri">https://collections.ala.org.au/public/show/dr359</a>,
-<em>[download date]</em>. <em>[Add the ALA download DOI if you have
-one.]</em></td>
+<td>BirdLife Australia (2026). Birdata. Accessed via the Atlas of Living
+Australia, <a href="https://collections.ala.org.au/public/show/dr359" class="uri">https://collections.ala.org.au/public/show/dr359</a>, 22nd,
+Oct 2026.</td>
 </tr>
 <tr class="even">
 <td>Fire extent (<code>data/fire/NIAFED_v20200623.*</code>)</td>
@@ -549,19 +546,51 @@ Canberra.</td>
 </tr>
 </tbody>
 </table>
-<p>Other references cited on the poster: Godfree et al. (2021) <em>Nat.
-Commun.</em> 12, 1023; Driscoll et al. (2024) <em>Nature</em> 635; Daly
-et al. (2026) <em>Aust. Zool.</em> 45(3), AZ26005.</p>
+<div id="data-preparation-already-done-optional-to-re-run" class="section level3">
+<h3>Data preparation (already done; optional to re-run)</h3>
+<p>The three CSV files in <code>data/</code> were built by
+<code>R/01_download.R</code>, with all settings in
+<code>R/config.R</code>. They are committed, so
+<code>fire_birds.Rmd</code> renders without re-running this step. To
+rebuild them, put your own ALA account email in <code>ALA_EMAIL</code>
+and run <code>source(&quot;R/01_download.R&quot;)</code> from the repository root
+(extra packages: <code>galah</code>, <code>sf</code>,
+<code>tibble</code>, <code>rlang</code>). The fire-distance step is slow
+(up to an hour or more).</p>
+<ol style="list-style-type: decimal">
+<li><strong>Download</strong> (<code>birdata_raw.csv</code>). Birdata
+records (ALA data resource dr359), 2015–2023, within lon 147.5–150.6,
+lat −38.0 to −35.0, with event fields (<code>eventID</code>,
+<code>samplingProtocol</code>). Unfiltered, all protocols.</li>
+<li><strong>Surveys</strong> (<code>surveys.csv</code>). Only “2ha, 20
+minute search” records are kept. One survey = one <code>eventID</code>.
+Site = coordinates rounded to 0.002° (~200 m). Period: <em>before</em> =
+1 Jul 2015 – 31 Jul 2019, <em>after</em> = 1 Mar 2020 – 31 Dec 2023; the
+fire season (Aug 2019 – Feb 2020) is dropped. Season is from the month
+(Dec–Feb = summer); <code>yrs_since_fire</code> is counted from 1 Jan
+2020.</li>
+<li><strong>Fire distance</strong>. The NIAFED polygon is cropped to the
+region (+~20 km), repaired, unioned and projected to Australian Albers
+(EPSG:3577). <code>fire_dist_m</code> = distance from each site to the
+fire edge in metres, negative inside the fire;
+<code>burnt = fire_dist_m ≤ 0</code>.</li>
+<li><strong>Detections</strong> (<code>detections_long.csv</code>).
+Every survey × 8 target species; <code>detected = 1</code> if the
+species was recorded as present in that survey, else 0. Flame Robin and
+Pied Currawong are included but not used.</li>
+<li><strong>In <code>fire_birds.Rmd</code></strong>: forest zones only
+(Canberra/ACT and inland tablelands dropped), sites within 2 km of the
+fire edge dropped, 7 analysis species kept, and Eastern Yellow Robin
+added from <code>birdata_raw.csv</code> (all its records are 2-ha
+20-minute searches). Result: 654 sites, 1,298 surveys.</li>
+</ol>
+</div>
 </div>
 <div id="use-of-generative-ai" class="section level2">
 <h2>Use of generative AI</h2>
-<!-- Fill in honestly: every tool, and what it was used for. -->
 <ul>
-<li><strong>Claude (Anthropic), via Claude Code:</strong> <em>[describe
-the earlier use, e.g. coding help with the GLMMs or the figures]</em>. I
-also used it to check the repository against the assessment brief and to
-draft the structure of this README (reproduction instructions, layout
-and provenance tables).</li>
+<li><strong>Claude via Claude Code:</strong> helped write codes, fit
+GLMM model. Language polish in readme.md</li>
 <li>The extended abstract, the poster text and all interpretations are
 my own.</li>
 </ul>

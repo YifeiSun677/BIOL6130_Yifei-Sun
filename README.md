@@ -56,8 +56,28 @@ The only random step (parametric bootstrap of the habitat-loss CIs) is seeded wi
 | Fire extent (`data/fire/NIAFED_v20200623.*`) | **National Indicative Aggregated Fire Extent Dataset** v20200623, compiled by the Australian Government Department of Agriculture, Water and the Environment from state and territory fire-mapping data for the 2019–20 season. | CC BY 4.0 | DAWE (2020). National Indicative Aggregated Fire Extent Dataset, v20200623. Department of Agriculture, Water and the Environment, Canberra. |
 | Poster figure (adapted) | Legge S. et al. (2022). Diversity and Distributions 28, 571–591. doi:10.1111/ddi.13428 | CC BY 4.0 | as given |
 
-Other references cited on the poster: Godfree et al. (2021) *Nat. Commun.* 12, 1023; Driscoll et al. (2024) *Nature* 635; Daly et al. (2026) *Aust. Zool.* 45(3), AZ26005.
+### Data preparation (already done; optional to re-run)
 
+The three CSV files in `data/` were built by `R/01_download.R`, with all settings in `R/config.R`.
+They are committed, so `fire_birds.Rmd` renders without re-running this step. To rebuild them, put your own
+ALA account email in `ALA_EMAIL` and run `source("R/01_download.R")` from the repository root
+(extra packages: `galah`, `sf`, `tibble`, `rlang`). The fire-distance step is slow (up to an hour or more).
+
+1. **Download** (`birdata_raw.csv`). Birdata records (ALA data resource dr359), 2015–2023, within
+   lon 147.5–150.6, lat −38.0 to −35.0, with event fields (`eventID`, `samplingProtocol`). Unfiltered.
+2. **Surveys** (`surveys.csv`). Only "2ha, 20 minute search" records are kept. One survey = one `eventID`.
+   Site = coordinates rounded to 0.002° (~200 m). Period: *before* = 1 Jul 2015 – 31 Jul 2019,
+   *after* = 1 Mar 2020 – 31 Dec 2023; the fire season (Aug 2019 – Feb 2020) is dropped. Season is from the month
+   (Dec–Feb = summer); `yrs_since_fire` is counted from 1 Jan 2020.
+3. **Fire distance**. The NIAFED polygon is cropped to the region (+~20 km), repaired, unioned and projected to
+   Australian Albers (EPSG:3577). `fire_dist_m` = distance from each site to the fire edge in metres,
+   negative inside the fire; `burnt = fire_dist_m ≤ 0`.
+4. **Detections** (`detections_long.csv`). Every survey × 8 target species; `detected = 1` if the species was
+   recorded as present in that survey, else 0. Flame Robin and Pied Currawong are included but not used.
+5. **In `fire_birds.Rmd`**: forest zones only (Canberra/ACT and inland tablelands dropped), sites within 2 km of
+   the fire edge dropped, 7 analysis species kept, and Eastern Yellow Robin added from `birdata_raw.csv`
+   (all its records are 2-ha 20-minute searches). Result: 654 sites, 1,298 surveys.
+   
 ## Use of generative AI
 
 - **Claude via Claude Code:** helped write codes, fit GLMM model. Language polish in readme.md
