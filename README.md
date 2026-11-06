@@ -46,6 +46,8 @@ The only random step (parametric bootstrap of the habitat-loss CIs) is seeded wi
 | `data/surveys.csv` | One row per survey: site, date, coordinates, before/after period, season, signed distance to the fire edge (`fire_dist_m`, negative = inside) |
 | `data/detections_long.csv` | One row per survey × species: detected (1/0) |
 | `data/fire/` | NIAFED fire-extent shapefile used to classify sites as burnt/unburnt |
+| `data/01_download.R` | Data preparation: downloads Birdata and NIAFED and builds the three CSVs (see below; optional to re-run) |
+| `data/config.R` | Settings for `01_download.R`: region, dates, BACI periods, site size, target species |
 
 
 ## Data provenance
@@ -58,9 +60,9 @@ The only random step (parametric bootstrap of the habitat-loss CIs) is seeded wi
 
 ### Data preparation (already done; optional to re-run)
 
-The three CSV files in `data/` were built by `R/01_download.R`, with all settings in `R/config.R`.
+The three CSV files in `data/` were built by `data/01_download.R`, with all settings in `data/config.R`.
 They are committed, so `fire_birds.Rmd` renders without re-running this step. To rebuild them, put your own
-ALA account email in `ALA_EMAIL` and run `source("R/01_download.R")` from the repository root
+ALA account email in `ALA_EMAIL` and run `source("data/01_download.R")` from the repository root
 (extra packages: `galah`, `sf`, `tibble`, `rlang`). The fire-distance step is slow (up to an hour or more).
 
 1. **Download** (`birdata_raw.csv`). Birdata records (ALA data resource dr359), 2015–2023, within
