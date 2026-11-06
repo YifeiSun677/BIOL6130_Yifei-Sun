@@ -5,6 +5,10 @@ output:
     toc: true
 ---
 
+```{css, echo = FALSE}
+.caption { font-size: calc(1.25em + 2px); font-weight: bold; }
+```
+
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(message = FALSE, warning = FALSE)
 suppressMessages({library(dplyr); library(readr); library(lme4); library(ggplot2); library(patchwork)})
@@ -233,6 +237,12 @@ gcol <- c(ground = "#8C6D31", understorey = "#C0392B", canopy = "#1F3A5F", all =
 fmt_ci <- function(e, l, h) gsub("-", "\u2212", sprintf("%.2f (%.2f, %.2f)", e, l, h))
 # format P: "< 0.001" if tiny, otherwise 3 decimals
 fmt_p  <- function(p) ifelse(p < 0.001, "< 0.001", sprintf("%.3f", p))
+# likelihood-ratio test as text, e.g. "H1 (m2 vs m1): χ²(2) = 8.27, P = 0.016"
+lrt_txt <- function(h, models) sprintf("%s (%s): χ²(%d) = %.2f, P = %s",
+                                       h, models, lrts[[h]]$df, lrts[[h]]$chisq, fmt_p(lrts[[h]]$p))
+# bigger title and subtitle, used by figures 1, 2 and 4
+big <- plot_annotation(theme = theme(plot.title = element_text(size = 20, face = "bold"),
+                                     plot.subtitle = element_text(size = 13, colour = "grey25")))
 # one x-axis for all four figures, wide enough for every interval
 xl <- c(floor(min(common$lo, guild$lo, contr$lo, within$lo) * 2) / 2,
         ceiling(max(common$hi, guild$hi, contr$hi, within$hi) * 2) / 2)
@@ -273,47 +283,47 @@ forest <- function(df, cols, xlab, title, subtitle = NULL, facet = FALSE, widths
 }
 ```
 
-```{r fig-h0, fig.width = 8, fig.height = 1.8, fig.cap = "Figure 1. Common fire effect across all seven species (H0)."}
+```{r fig-h0, fig.width = 8, fig.height = 2.2, fig.cap = "Figure 1. Overall fire effect (δ, log-odds) across all 7 species, <br> with 95% CI.P is from the likelihood-ratio test (m1 vs m0)."}
 # fig1., overall effect
 forest(mutate(common, col = "all"),
        list("P" = fmt_p(lrts$H0$p)),
        xlab = "Fire effect",
-       title = "(a) Overall fire effect") +
-  plot_annotation(theme = theme(plot.title = element_text(size = 18, face = "bold")))
+       title = "(a) Overall fire effect",
+       subtitle = lrt_txt("H0", "m1 vs m0")) + big
 ```
 
-```{r fig-h1, fig.width = 8, fig.height = 2.4, fig.cap = "Figure 2. Fire effect for each guild (H1)."}
+```{r fig-h1, fig.width = 8, fig.height = 2.8, fig.cap = "Figure 2. Fire effect (δ) for each guild, <br> with 95% CI. The subtitle gives the likelihood-ratio test (m2 vs m1)."}
 g <- mutate(guild, col = label, label = tools::toTitleCase(label))
 g <- g[match(c("canopy", "understorey", "ground"), g$col), ]   # top to bottom
 p <- forest(g,
             list("P" = fmt_p(g$p)),
             xlab = "Fire effect across guilds",
-            title = "(b) Fire effect by guild") +
-  plot_annotation(theme = theme(plot.title = element_text(size = 18, face = "bold")))
+            title = "(b) Fire effect by guild",
+            subtitle = lrt_txt("H1", "m2 vs m1")) + big
 p[[1]] <- p[[1]] + theme(axis.text.y = element_text(size = 15, colour = "black"))
 p
 ```
 
-```{r fig-h1-contrasts, fig.width = 8, fig.height = 2.4, fig.cap = "Figure 3. Pairwise differences in fire effect between guilds (H1)."}
+```{r fig-h1-contrasts, fig.width = 8, fig.height = 2.8, fig.cap = "Figure 3. Difference in δ between guilds (first minus second)"}
 # was not used in poster, but still kept for better comparison
 k <- mutate(contr, col = "all", label = sub("^(\\w)", "\\U\\1", label, perl = TRUE))
 forest(k, list("P" = fmt_p(k$p)),
        xlab = "Difference in fire effect, \u0394\u03b4 (log odds ratio)",
-       title = "(c) Guild vs guild", subtitle = "Negative = the first guild declined more")
+       title = "(c) Guild vs guild", subtitle = "Negative = the first guild declined more") + big
 ```
 
-```{r fig-h2, fig.width = 8, fig.height = 3.4, fig.cap = "Figure 4. Pairwise differences in fire effect between species within the same guild (H2)."}
+```{r fig-h2, fig.width = 8, fig.height = 3.8, fig.cap = "Figure 4. Difference in δ between species in the same guild."}
 wp <- mutate(within, col = grp)
 p <- forest(wp, list("P" = fmt_p(wp$p)),
             xlab = "Difference in fire effect",
             title = "(c) Species vs species within each guild",
-            facet = TRUE, widths = c(1, 1.15)) +
-  plot_annotation(theme = theme(plot.title = element_text(size = 18, face = "bold")))
+            subtitle = lrt_txt("H2", "m3 vs m2"),
+            facet = TRUE, widths = c(1, 1.15)) + big
 p[[1]] <- p[[1]] + theme(strip.text.y.left = element_text(size = 15, face = "bold", angle = 0, hjust = 1))
 p
 ```
 
-```{r habitat-figure, fig.width = 8, fig.height = 3.4}
+```{r habitat-figure, fig.width = 8, fig.height = 3.4, fig.cap = "Figure 5. Predicted detection at burnt sites after the fire, <br> without fire (full bar) and with fire (coloured part).<br>Grey = lost to fire."}
 # gcol, theme_fp from figure-setup
 w <- tidyr::pivot_wider(mgmt, id_cols = guild, names_from = quantity, values_from = est) |>
   mutate(guild = factor(tools::toTitleCase(guild), tools::toTitleCase(glev)))   # first level at the bottom: canopy on top
@@ -339,6 +349,6 @@ p2 <- ggplot(tab, aes(x, guild, label = txt)) +
 
 (p1 + p2 + plot_layout(widths = c(3, 1))) +
   plot_annotation(title = "Habitat lost to fire, by guild",
-                  theme = theme_fp + theme(plot.title = element_text(size = 18, face = "bold")))
+                  theme = theme_fp + theme(plot.title = element_text(size = 20, face = "bold")))
 ```
 
